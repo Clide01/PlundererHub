@@ -1,4 +1,7 @@
 local HttpGet = game:HttpGet
+
+scriptkey = "keyless"
+
 local ROUTES = {
     -- Steal An Egg
     [107778070777162] = "https://api.redstoneguard.xyz/api/loader/f57732b2-b144-4aa4-8beb-80789d4ad6aa/init",
