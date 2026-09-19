@@ -1,6 +1,6 @@
 local HttpGet = game:HttpGet
 
-scriptkey = "keyless"
+scriptkey = "KEY_HERE_F247FA524B3F458A"
 
 local ROUTES = {
     -- Steal An Egg
