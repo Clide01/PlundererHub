@@ -1,7 +1,7 @@
 local HttpGet = game:HttpGet
 local ROUTES = {
     -- Steal An Egg
-    [107778070777162] = "https://api.redstoneguard.xyz/api/loader/95b209b3-00cc-41df-abcc-d04353022a7f/init",
+    [107778070777162] = "https://api.redstoneguard.xyz/api/loader/f57732b2-b144-4aa4-8beb-80789d4ad6aa/init",
 
 }
 
