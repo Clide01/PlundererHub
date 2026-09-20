@@ -2,7 +2,7 @@ local HttpGet = game:HttpGet
 
 local ROUTES = {
     -- Steal An Egg
-    [107778070777162] = "https://api.redstoneguard.xyz/api/loader/f57732b2-b144-4aa4-8beb-80789d4ad6aa/init",
+    [107778070777162] = "https://luasnapper.xyz/files/loaders/ec7cea9c6d4640d7837d8bdbb7077cd9.lua",
 }
 
 local function loadScriptForPlace()
