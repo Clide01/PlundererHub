@@ -8,7 +8,7 @@ local ROUTES = {
 local function loadScriptForPlace()
     local url = ROUTES[game.PlaceId]
     if not url then
-        warn("[PlundererHub] No script for this game")
+        warn("[PlundererHub] No script for this game (PlaceId: " .. tostring(game.PlaceId) .. ")")
         return
     end
 
