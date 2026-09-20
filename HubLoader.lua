@@ -1,4 +1,4 @@
-
+local HttpGet = game:HttpGet
 
 local ROUTES = {
     -- Steal An Egg
@@ -19,5 +19,6 @@ local function loadScriptForPlace()
     if not ok then
         warn("[PlundererHub] Failed: " .. tostring(err))
     end
+end
 
 loadScriptForPlace()
