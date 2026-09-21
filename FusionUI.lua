@@ -44,7 +44,7 @@ end
 function FusionUI.new(playerGui, config)
     local self = setmetatable({}, FusionUI)
     self.config = config or {}
-    self.title = self.config.Title or "Fusion Matchmaking"
+    self.title = self.config.Title or "PlundererHub"
     self.playerGui = playerGui
     self.toggleCallback = nil
     self.closeCallback = nil
