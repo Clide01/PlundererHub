@@ -1,46 +1,114 @@
+print("[PlundererHub] === START ===")
+
 local Players      = game:GetService("Players")
 local RunService   = game:GetService("RunService")
 local HttpService  = game:GetService("HttpService")
 local RS           = game:GetService("ReplicatedStorage")
 
+print("[PlundererHub] Step 1: services loaded")
+
 local LP = Players.LocalPlayer
 local PlayerGui = LP:WaitForChild("PlayerGui")
+print("[PlundererHub] Step 2: player + gui ready")
 
 local gv = (getgenv and getgenv()) or _G
-if gv.__PLUNDERER_RUNNING then return end
+if gv.__PLUNDERER_RUNNING then
+    warn("[PlundererHub] Already running — aborting")
+    return
+end
 gv.__PLUNDERER_RUNNING = true
+print("[PlundererHub] Step 3: guard set")
 
 local UI_URL      = "https://raw.githubusercontent.com/Clide01/PlundererHub/refs/heads/main/PlundererUI.lua"
 local MODULES_URL = "https://raw.githubusercontent.com/Clide01/PlundererHub/refs/heads/main/PlundererModules.lua"
 
-local PlundererUI
-do
-    local ok, mod = pcall(function()
-        return loadstring(game:HttpGet(UI_URL, true))()
+-- =========================================================
+-- TIMED HTTP FETCH
+-- =========================================================
+local function timedFetch(url, timeout)
+    timeout = timeout or 8
+    print(("[PlundererHub] Fetching %s (timeout %ds)"):format(url:sub(-40), timeout))
+    local start = tick()
+
+    local body = nil
+    local done = false
+    task.spawn(function()
+        local ok, res = pcall(function() return game:HttpGet(url, true) end)
+        if ok then body = res end
+        done = true
     end)
-    if not ok or type(mod) ~= "table" then
-        warn("[PlundererHub] UI failed")
-        gv.__PLUNDERER_RUNNING = false
-        return
+
+    while not done and (tick() - start) < timeout do
+        task.wait(0.1)
     end
-    PlundererUI = mod
+
+    if not done then
+        warn(("[PlundererHub] TIMEOUT after %ds fetching %s"):format(timeout, url))
+        return nil
+    end
+    print(("[PlundererHub] Fetched in %.2fs (%d bytes)"):format(tick() - start, type(body) == "string" and #body or 0))
+    return body
 end
 
-local Modules
+-- =========================================================
+-- LOAD MODULES FIRST (smaller, faster)
+-- =========================================================
+print("[PlundererHub] Step 4: loading Modules...")
+local Modules = nil
 do
-    local ok, mod = pcall(function()
-        return loadstring(game:HttpGet(MODULES_URL, true))()
-    end)
-    if ok and type(mod) == "table" and type(mod.getFieldEggs) == "function" then
-        Modules = mod
+    local body = timedFetch(MODULES_URL, 6)
+    if body then
+        local fn, err = loadstring(body)
+        if fn then
+            local ok, mod = pcall(fn)
+            if ok and type(mod) == "table" and type(mod.getFieldEggs) == "function" then
+                Modules = mod
+                print("[PlundererHub] Modules loaded OK")
+            else
+                warn("[PlundererHub] Modules table invalid:", tostring(mod))
+            end
+        else
+            warn("[PlundererHub] Modules compile failed:", err)
+        end
     else
-        warn("[PlundererHub] Modules failed")
-        gv.__PLUNDERER_RUNNING = false
-        return
+        warn("[PlundererHub] Modules fetch timed out — continuing without")
     end
 end
 
+-- =========================================================
+-- LOAD UI
+-- =========================================================
+print("[PlundererHub] Step 5: loading UI...")
+local PlundererUI = nil
+do
+    local body = timedFetch(UI_URL, 8)
+    if body then
+        local fn, err = loadstring(body)
+        if fn then
+            local ok, mod = pcall(fn)
+            if ok and type(mod) == "table" and type(mod.new) == "function" then
+                PlundererUI = mod
+                print("[PlundererHub] UI loaded OK")
+            else
+                warn("[PlundererHub] UI table invalid:", tostring(mod))
+            end
+        else
+            warn("[PlundererHub] UI compile failed:", err)
+        end
+    else
+        warn("[PlundererHub] UI fetch timed out")
+    end
+end
+
+if not PlundererUI then
+    warn("[PlundererHub] Cannot continue without UI")
+    gv.__PLUNDERER_RUNNING = false
+    return
+end
+
+print("[PlundererHub] Step 6: building UI window...")
 local ui = PlundererUI.new(PlayerGui, { Title = "PlundererHub" })
+print("[PlundererHub] Step 7: UI built")
 
 -- =========================================================
 -- STATE
@@ -54,12 +122,11 @@ local State = {
     AutoSteal        = false,
     AutoAttack       = false,
     AutoTreadmill    = false,
-    StealFromTarget  = nil,
     HeightScale      = 1.0,
     WalkSpeed        = 115,
     AttackRange      = 20,
     AreaFilter       = "All",
-    StealDelay       = 2,
+    StealDelay       = 3,
 }
 
 local function getHum()
@@ -71,8 +138,10 @@ local function getNetworking()
     return RS:FindFirstChild("Packages") and RS.Packages:FindFirstChild("Networking")
 end
 
+print("[PlundererHub] Step 8: defining modules...")
+
 -- =========================================================
--- BASELINE MODULES (same as v1.0)
+-- BASELINE MODULES
 -- =========================================================
 local ANTI_STATES = {
     Enum.HumanoidStateType.Ragdoll,
@@ -161,49 +230,54 @@ local function setAutoSell(on)
 end
 
 -- =========================================================
--- NEW MODULE THREADS
+-- NEW MODULES (guarded by Modules being loaded)
 -- =========================================================
 local stealThread
 local function setAutoSteal(on)
     State.AutoSteal = on
     if stealThread then task.cancel(stealThread); stealThread = nil end
-    if on then
-        stealThread = task.spawn(function()
-            while State.AutoSteal do
-                local ok, result = pcall(function()
-                    return Modules:autoStealStep(State.AreaFilter, "Common")
-                end)
-                if ok then
-                    ui:setBottomStatus("[Steal] " .. tostring(result))
-                    print("[AutoSteal]", result)
-                else
-                    print("[AutoSteal] Error:", result)
-                end
-                task.wait(State.StealDelay)
-            end
-        end)
+    if not on then return end
+    if not Modules then
+        warn("[AutoSteal] Modules not loaded")
+        return
     end
+    stealThread = task.spawn(function()
+        while State.AutoSteal do
+            local ok, result = pcall(function()
+                return Modules:autoStealStep(State.AreaFilter, "Common")
+            end)
+            print("[AutoSteal]", tostring(result))
+            if not ok then
+                ui:setBottomStatus("[Steal] error: " .. tostring(result))
+            else
+                ui:setBottomStatus("[Steal] " .. tostring(result))
+            end
+            task.wait(State.StealDelay)
+        end
+    end)
 end
 
 local attackThread
 local function setAutoAttack(on)
     State.AutoAttack = on
     if attackThread then task.cancel(attackThread); attackThread = nil end
-    if on then
-        attackThread = task.spawn(function()
-            while State.AutoAttack do
-                local ok, result = pcall(function()
-                    return Modules:attackStep(State.AttackRange)
-                end)
-                if ok then
-                    ui:setBottomStatus("[Attack] " .. tostring(result))
-                    print("[AutoAttack]", result)
-                end
-                task.wait(1)
-            end
-        end)
+    if not on then return end
+    if not Modules then
+        warn("[AutoAttack] Modules not loaded")
+        return
     end
+    attackThread = task.spawn(function()
+        while State.AutoAttack do
+            local ok, result = pcall(function()
+                return Modules:attackStep(State.AttackRange)
+            end)
+            print("[AutoAttack]", tostring(result))
+            task.wait(1)
+        end
+    end)
 end
+
+print("[PlundererHub] Step 9: wiring UI tabs...")
 
 LP.CharacterAdded:Connect(function()
     task.wait(2)
@@ -239,14 +313,12 @@ ui:addSlider(moveSection, "WalkSpeed Value", 16, 500, 115, function(v)
     if State.WalkSpeedBoost then applyWalkSpeed(v) end
 end)
 
--- AUTO TAB
 local autoTab = ui:addTab("Auto", "⚡")
-
 local stealSection = ui:addSection(autoTab, "Egg Stealing")
 ui:addToggle(stealSection, "Auto Steal Field Eggs", false, function(v)
     setAutoSteal(v)
 end)
-ui:addSlider(stealSection, "Steal Delay (seconds)", 1, 10, 2, function(v)
+ui:addSlider(stealSection, "Steal Delay (seconds)", 1, 10, 3, function(v)
     State.StealDelay = v
 end)
 
@@ -258,13 +330,6 @@ ui:addSlider(attackSection, "Attack Range (studs)", 5, 50, 20, function(v)
     State.AttackRange = v
 end)
 
-local treadmillSection = ui:addSection(autoTab, "Treadmill")
-ui:addToggle(treadmillSection, "Auto Treadmill", false, function(v)
-    State.AutoTreadmill = v
-    Modules:setAutoTreadmill(v)
-end)
-
--- SELL TAB
 local sellTab = ui:addTab("Selling", "💰")
 local sellSection = ui:addSection(sellTab, "Auto Sell")
 ui:addToggle(sellSection, "Auto Sell (every 3s)", false, function(v)
@@ -272,13 +337,8 @@ ui:addToggle(sellSection, "Auto Sell (every 3s)", false, function(v)
 end)
 ui:addButton(sellSection, "Sell Now", fireSellAll)
 
-local infoTab = ui:addTab("Info", "ℹ")
-local infoSection = ui:addSection(infoTab, "PlundererHub v1.1")
-ui:addLabel(infoSection, "Character: 6 modules")
-ui:addLabel(infoSection, "Auto: 4 modules")
-ui:addLabel(infoSection, "Total: 10 working modules")
-
 ui:setStatus("Ready", "idle")
 ui:setBottomStatus("PlundererHub v1.1 loaded")
 
-print("[PlundererHub] v1.1 loaded — 10 modules active")
+print("[PlundererHub] === READY ===")
+print("[PlundererHub] 10 modules active")
