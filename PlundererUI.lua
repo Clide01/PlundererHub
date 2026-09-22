@@ -88,7 +88,7 @@ function PlundererUI:_build()
     local glow = Instance.new("Frame")
     glow.AnchorPoint = Vector2.new(0.5, 0.5)
     glow.Size = UDim2.fromOffset(620, 460)
-    glow.Position = UDim2.new(0.5, 0, 0.5, 0)
+    glow.Position = UDim2.new(0.5, 0, 0.5, 30)
     glow.BackgroundColor3 = C.primary
     glow.BackgroundTransparency = 0.94
     glow.BorderSizePixel = 0
@@ -99,7 +99,7 @@ function PlundererUI:_build()
 
     local shadow = Instance.new("Frame")
     shadow.AnchorPoint = Vector2.new(0.5, 0.5)
-    shadow.Position = UDim2.new(0.5, 2, 0.5, 8)
+    shadow.Position = UDim2.new(0.5, 2, 0.5, 38)
     shadow.Size = UDim2.fromOffset(568, 408)
     shadow.BackgroundColor3 = Color3.new(0, 0, 0)
     shadow.BackgroundTransparency = 0.5
@@ -113,7 +113,7 @@ function PlundererUI:_build()
     win.Name = "Window"
     win.AnchorPoint = Vector2.new(0.5, 0.5)
     win.Size = UDim2.fromOffset(560, 400)
-    win.Position = UDim2.new(0.5, 0, 0.5, 0)
+    win.Position = UDim2.new(0.5, 0, 0.5, 30)
     win.BackgroundColor3 = C.bg
     win.BackgroundTransparency = 0.02
     win.BorderSizePixel = 0
