@@ -18,7 +18,7 @@ local MODULES_URL = "https://raw.githubusercontent.com/Clide01/PlundererHub/main
 
 local function timedFetch(url, timeout)
     timeout = timeout or 8
-    local body, done
+    local body, done = nil, false
     task.spawn(function()
         local ok, res = pcall(function() return game:HttpGet(url, true) end)
         if ok then body = res end
@@ -91,11 +91,17 @@ local State = {
     TargetCategory   = "All",
     AttackMode       = "Any Nearby",
     SpecificTarget   = nil,
+    SafePosition     = nil,
 }
 
 local function getHum()
     local c = LP.Character
     return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function getHRP()
+    local c = LP.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
 end
 
 local function getNetworking()
@@ -190,15 +196,25 @@ local function setAutoSell(on)
     end
 end
 
+-- =========================================================
+-- AUTO STEAL
+-- =========================================================
 local stealThread
 local function setAutoSteal(on)
     State.AutoSteal = on
     if stealThread then task.cancel(stealThread); stealThread = nil end
     if not on then return end
+
+    local hrp = getHRP()
+    if hrp then
+        State.SafePosition = hrp.Position
+        print("[PlundererHub] Safe position captured:", tostring(State.SafePosition))
+    end
+
     stealThread = task.spawn(function()
         while State.AutoSteal do
             local ok, result = pcall(function()
-                return Modules:autoStealStep(State.TargetCategory)
+                return Modules:autoStealStep(State.TargetCategory, State.SafePosition)
             end)
             local msg = ok and tostring(result) or ("error: " .. tostring(result))
             ui:setBottomStatus("[Steal] " .. msg)
@@ -208,6 +224,9 @@ local function setAutoSteal(on)
     end)
 end
 
+-- =========================================================
+-- AUTO ATTACK
+-- =========================================================
 local attackThread
 local function setAutoAttack(on)
     State.AutoAttack = on
@@ -242,7 +261,7 @@ LP.CharacterAdded:Connect(function()
 end)
 
 -- =========================================================
--- UI
+-- UI — CHARACTER TAB
 -- =========================================================
 local charTab = ui:addTab("Character", "🛡")
 local defenseSection = ui:addSection(charTab, "Defense")
@@ -268,12 +287,13 @@ ui:addSlider(moveSection, "WalkSpeed Value", 16, 500, 115, function(v)
     if State.WalkSpeedBoost then applyWalkSpeed(v) end
 end)
 
--- AUTO TAB
+-- =========================================================
+-- UI — AUTO TAB
+-- =========================================================
 local autoTab = ui:addTab("Auto", "⚡")
 
 local stealSection = ui:addSection(autoTab, "Egg Stealing")
 
--- Dynamic egg category dropdown (fetched from field snapshot)
 local categoryList = Modules:getEggCategories()
 local categoryDropdown = ui:addDropdown(stealSection, "Target Egg", categoryList, "All", function(v)
     State.TargetCategory = v
@@ -283,8 +303,19 @@ end)
 ui:addButton(stealSection, "🔄 Refresh Egg List", function()
     local fresh = Modules:getEggCategories()
     categoryDropdown.set(State.TargetCategory)
-    ui:setBottomStatus("Egg list refreshed (" .. #fresh - 1 .. " categories)")
+    ui:setBottomStatus("Found " .. (#fresh - 1) .. " egg categories")
     print("[PlundererHub] Egg categories:", table.concat(fresh, ", "))
+end)
+
+ui:addButton(stealSection, "📍 Set Safe Position Here", function()
+    local hrp = getHRP()
+    if hrp then
+        State.SafePosition = hrp.Position
+        ui:setBottomStatus("Safe position set")
+        print("[PlundererHub] Safe position:", tostring(State.SafePosition))
+    else
+        ui:setBottomStatus("No character")
+    end
 end)
 
 ui:addToggle(stealSection, "Auto Steal", false, function(v)
@@ -293,8 +324,15 @@ end)
 ui:addSlider(stealSection, "Steal Delay (s)", 1, 10, 3, function(v)
     State.StealDelay = v
 end)
+ui:addButton(stealSection, "🎯 Steal Once Now", function()
+    local ok, res = pcall(function()
+        return Modules:autoStealStep(State.TargetCategory, State.SafePosition)
+    end)
+    local msg = ok and tostring(res) or ("error: " .. tostring(res))
+    ui:setBottomStatus("[Steal] " .. msg)
+    print("[AutoSteal]", msg)
+end)
 
--- COMBAT TAB
 local combatSection = ui:addSection(autoTab, "Combat")
 ui:addDropdown(combatSection, "Attack Mode", {
     "Any Nearby", "Specific Player",
@@ -308,34 +346,38 @@ end)
 ui:addToggle(combatSection, "Auto Attack", false, function(v)
     setAutoAttack(v)
 end)
-ui:addButton(combatSection, "Attack Nearest Now", function()
+ui:addButton(combatSection, "⚔ Attack Nearest Now", function()
     local ok, res = pcall(function() return Modules:attackStep(State.AttackRange) end)
     ui:setBottomStatus("[Attack] " .. tostring(res))
     print("[AutoAttack]", res)
 end)
 
--- SELL TAB
+-- =========================================================
+-- UI — SELLING TAB
+-- =========================================================
 local sellTab = ui:addTab("Selling", "💰")
 local sellSection = ui:addSection(sellTab, "Auto Sell")
 ui:addToggle(sellSection, "Auto Sell (every 3s)", false, function(v)
     setAutoSell(v)
 end)
-ui:addButton(sellSection, "Sell Now", function()
+ui:addButton(sellSection, "💸 Sell Now", function()
     fireSellAll()
     ui:setBottomStatus("Sold all pets")
 end)
 
--- INFO TAB
+-- =========================================================
+-- UI — INFO TAB
+-- =========================================================
 local infoTab = ui:addTab("Info", "ℹ")
-local infoSection = ui:addSection(infoTab, "PlundererHub v1.2")
-ui:addLabel(infoSection, "Character: 6 modules")
-ui:addLabel(infoSection, "Auto Steal: 1 module")
-ui:addLabel(infoSection, "Combat: 2 modules")
-ui:addLabel(infoSection, "Selling: 1 module")
-ui:addLabel(infoSection, "Total: 10 modules")
+local infoSection = ui:addSection(infoTab, "PlundererHub v1.3")
+ui:addLabel(infoSection, "Character — 6 modules")
+ui:addLabel(infoSection, "Auto Steal — prompt-driven")
+ui:addLabel(infoSection, "Auto Return — back to safe zone")
+ui:addLabel(infoSection, "Combat — 2 modules")
+ui:addLabel(infoSection, "Selling — 1 module")
 
 ui:setStatus("Ready", "idle")
-ui:setBottomStatus("PlundererHub v1.2 loaded")
+ui:setBottomStatus("PlundererHub v1.3 loaded")
 
 print("[PlundererHub] === READY ===")
-print("[PlundererHub] v1.2 loaded — 10 modules active")
+print("[PlundererHub] v1.3 loaded")
