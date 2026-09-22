@@ -151,12 +151,46 @@ local function getClosest(originPos, list)
 end
 
 -- =========================================================
--- AUTO STEAL STEP
+-- PROMPT FINDER
 -- =========================================================
-function Modules:autoStealStep(category)
+local function findStealPromptNear(position, radius)
+    radius = radius or 15
+    local best, bestDist = nil, math.huge
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            local parent = obj.Parent
+            if parent and parent:IsA("BasePart") then
+                local d = (parent.Position - position).Magnitude
+                if d < radius and d < bestDist then
+                    local a = string.lower(obj.ActionText or "")
+                    local o = string.lower(obj.ObjectText or "")
+                    if string.find(a, "steal", 1, true) or string.find(o, "egg", 1, true) then
+                        best, bestDist = obj, d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function triggerPrompt(prompt)
+    if not prompt then return false end
+    local okB = pcall(function() prompt:InputHoldBegin() end)
+    if not okB then return false end
+    task.wait(math.max(0.5, prompt.HoldDuration or 1.0) + 0.1)
+    pcall(function() prompt:InputHoldEnd() end)
+    return true
+end
+
+-- =========================================================
+-- AUTO STEAL STEP (FIXED)
+-- =========================================================
+function Modules:autoStealStep(category, safePosition)
     local hrp = getHRP()
     if not hrp then return "no character" end
 
+    -- 1) Read snapshot
     local eggs = self:getFieldEggs()
     if #eggs == 0 then return "no eggs in field" end
 
@@ -168,30 +202,39 @@ function Modules:autoStealStep(category)
                 table.insert(filtered, e)
             end
         end
-        if #filtered == 0 then
-            return "no " .. category .. " eggs available"
-        end
+        if #filtered == 0 then return "no " .. category .. " eggs" end
     end
 
+    -- 2) Pick closest
     local target = getClosest(hrp.Position, filtered)
     if not target then return "no target" end
 
-    -- Fast teleport to target
-    teleportNear(target.position, 5)
+    -- 3) Teleport near target
+    teleportNear(target.position, 4)
+    task.wait(0.35)
+
+    -- 4) Walk onto nest (server needs this for position tracking)
+    walkTo(target.position, 4)
     task.wait(0.3)
 
-    -- Walk precisely onto the nest
-    walkTo(target.position, 4)
-    task.wait(0.8)
+    -- 5) Find the steal ProximityPrompt near us
+    hrp = getHRP()
+    if not hrp then return "character lost" end
+    local prompt = findStealPromptNear(hrp.Position, 15)
+    if not prompt then return "no steal prompt near " .. target.category end
 
-    -- Wait for FieldEggCarry event
+    -- 6) Fire the prompt (this is the missing piece)
+    triggerPrompt(prompt)
+    task.wait(0.5)
+
+    -- 7) Wait for carry confirmation
     local carried = false
-    local carryConn
     local net = getNetworking()
+    local carryConn
     if net then
-        local carryEvent = net:FindFirstChild("RE/EggWorld/FieldEggCarry")
-        if carryEvent then
-            carryConn = carryEvent.OnClientEvent:Connect(function(payload)
+        local ev = net:FindFirstChild("RE/EggWorld/FieldEggCarry")
+        if ev then
+            carryConn = ev.OnClientEvent:Connect(function(payload)
                 if type(payload) == "table" and payload.IsCarrying then
                     carried = true
                 end
@@ -199,15 +242,19 @@ function Modules:autoStealStep(category)
         end
     end
 
-    -- Poll for 2 seconds
-    local start = tick()
-    while tick() - start < 2 and not carried do
+    local t0 = tick()
+    while tick() - t0 < 2 and not carried do
         task.wait(0.1)
     end
-
     if carryConn then carryConn:Disconnect() end
 
-    return carried and ("carried " .. target.category) or ("reached " .. target.category .. " (no carry)")
+    -- 8) Return to safe zone
+    if safePosition then
+        teleportNear(safePosition, 3)
+        task.wait(0.5)
+    end
+
+    return carried and ("stole " .. target.category) or ("tried " .. target.category)
 end
 
 -- =========================================================
