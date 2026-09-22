@@ -197,6 +197,7 @@ end
 -- =========================================================
 -- AUTO STEAL STEP (revised)
 -- =========================================================
+print("[AutoSteal] Cycle start | SafePosition:", tostring(safePosition))
 function Modules:autoStealStep(category, safePosition)
     local hrp = getHRP()
     if not hrp then return "no character" end
