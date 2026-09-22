@@ -7,9 +7,6 @@ local LP = Players.LocalPlayer
 local Modules = {}
 Modules.__index = Modules
 
--- =========================================================
--- INTERNAL HELPERS
--- =========================================================
 local function getNetworking()
     return RS:FindFirstChild("Packages") and RS.Packages:FindFirstChild("Networking")
 end
@@ -25,7 +22,7 @@ local function getHum()
 end
 
 -- =========================================================
--- EGG SNAPSHOT READER
+-- EGG SNAPSHOT
 -- =========================================================
 function Modules:getFieldEggs()
     local net = getNetworking()
@@ -42,12 +39,14 @@ function Modules:getFieldEggs()
     for _, rec in pairs(res.Records) do
         if type(rec) == "table" and rec.State == "Slot" and rec.BoundsCFrame then
             table.insert(eggs, {
-                uid       = tostring(rec.NestId or ""),
-                position  = rec.BoundsCFrame.Position,
-                cframe    = rec.BoundsCFrame,
-                scale     = rec.NestScale or 1,
-                category  = rec.AssetCategory,
-                rarity    = rec.Rarity,
+                uid      = tostring(rec.NestId or ""),
+                position = rec.BoundsCFrame.Position,
+                cframe   = rec.BoundsCFrame,
+                scale    = rec.NestScale or 1,
+                category = rec.AssetCategory,
+                rarity   = rec.Rarity,
+                rarityNum= rec.RarityNumber or 0,
+                area     = rec.AreaId or "Unknown",
             })
         end
     end
@@ -55,7 +54,7 @@ function Modules:getFieldEggs()
 end
 
 -- =========================================================
--- PLAYER SNAPSHOT READER
+-- LIVE PLAYERS (for steal-from-players)
 -- =========================================================
 function Modules:getLivePlayers()
     local net = getNetworking()
@@ -73,95 +72,169 @@ function Modules:getLivePlayers()
             if type(entry.Records) == "table" then
                 for uid, pet in pairs(entry.Records) do
                     table.insert(pets, {
-                        uid      = tostring(uid),
+                        uid = tostring(uid),
                         category = pet.AssetCategory or "Unknown",
-                        scale    = pet.AssetScale or 1,
+                        scale = pet.AssetScale or 1,
                         hasParasite = pet.HasParasite == true,
                     })
                 end
             end
-            table.insert(out, {
-                userId = tonumber(entry.OwnerUserId),
-                pets = pets,
-                petCount = #pets,
-            })
+            table.insert(out, { userId = tonumber(entry.OwnerUserId), pets = pets, petCount = #pets })
         end
     end
     return out
 end
 
 -- =========================================================
--- DISTANCE UTILS
+-- SCAN FOR NEST PROMPTS
 -- =========================================================
-local function getClosest(originPos, list)
-    if not originPos or #list == 0 then return nil end
-    local best, bestDist = nil, math.huge
-    for _, item in ipairs(list) do
-        if item.position then
-            local d = (item.position - originPos).Magnitude
-            if d < bestDist then best, bestDist = item, d end
+local function findNestPrompt(eggPos)
+    local objFolder = workspace:FindFirstChild("__OBJECTS")
+    if not objFolder then return nil end
+    local areas = objFolder:FindFirstChild("Areas")
+    if not areas then return nil end
+    local guard = areas:FindFirstChild("GuardAreas")
+    if not guard then return nil end
+
+    local bestPrompt, bestDist = nil, math.huge
+    for _, area in ipairs(guard:GetChildren()) do
+        local nests = area:FindFirstChild("Nests")
+        if nests then
+            for _, nest in ipairs(nests:GetChildren()) do
+                local nestModel = nest:FindFirstChild("Model")
+                if nestModel then
+                    local pp = nestModel.PrimaryPart or nestModel:FindFirstChildWhichIsA("BasePart", true)
+                    if pp then
+                        local d = (pp.Position - eggPos).Magnitude
+                        if d < 15 then
+                            for _, descendant in ipairs(nest:GetDescendants()) do
+                                if descendant:IsA("ProximityPrompt") then
+                                    if d < bestDist then
+                                        bestPrompt, bestDist = descendant, d
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
         end
     end
-    return best, bestDist
+    return bestPrompt, bestDist
 end
 
 -- =========================================================
--- MOVE: WALK-TO with MoveTo
+-- FAST MOVE (CFrame step)
 -- =========================================================
-function Modules:moveTo(targetPos, timeout)
-    timeout = timeout or 8
-    local hum = getHum()
+local function fastMove(targetPos, timeout)
+    timeout = timeout or 3
     local hrp = getHRP()
-    if not hum or not hrp then return false end
+    if not hrp then return false end
 
     local start = tick()
     while tick() - start < timeout do
         hrp = getHRP()
         if not hrp then return false end
-        local dist = (targetPos - hrp.Position).Magnitude
-        if dist < 4 then return true end
-
-        pcall(function() hum:MoveTo(targetPos) end)
-        task.wait(0.15)
+        local delta = targetPos - hrp.Position
+        local dist = delta.Magnitude
+        if dist < 3 then return true end
+        local step = math.min(15, dist)
+        hrp.CFrame = CFrame.new(hrp.Position + delta.Unit * step)
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        RunService.Heartbeat:Wait()
     end
     return false
 end
 
 -- =========================================================
--- MODULE: AUTO STEAL FIELD EGGS
+-- AUTO STEAL with filters
 -- =========================================================
-function Modules:autoStealStep(areaFilter, minRarity)
+function Modules:autoStealStep(filters)
+    filters = filters or {}
+    local areaFilter = filters.area or "All"
+    local rarityFilter = filters.rarity or "All"
+    local nameFilter = filters.petName or "All"
+
     local hrp = getHRP()
     if not hrp then return "no character" end
 
     local eggs = self:getFieldEggs()
     if #eggs == 0 then return "no eggs in field" end
 
-    -- Filter by area if needed (uid contains area)
+    -- Filter by area
     local filtered = eggs
-    if areaFilter and areaFilter ~= "All" then
-        filtered = {}
-        for _, e in ipairs(eggs) do
-            if string.find(string.lower(e.uid), string.lower(areaFilter), 1, true) then
-                table.insert(filtered, e)
+    if areaFilter ~= "All" then
+        local next = {}
+        for _, e in ipairs(filtered) do
+            if e.area == areaFilter or string.find(e.uid, areaFilter, 1, true) then
+                table.insert(next, e)
             end
         end
-        if #filtered == 0 then return "no eggs in " .. areaFilter end
+        filtered = next
     end
 
-    local target = getClosest(hrp.Position, filtered)
-    if not target then return "no target" end
+    -- Filter by rarity
+    if rarityFilter ~= "All" then
+        local next = {}
+        for _, e in ipairs(filtered) do
+            if e.rarity == rarityFilter or tostring(e.rarityNum) == tostring(rarityFilter) then
+                table.insert(next, e)
+            end
+        end
+        filtered = next
+    end
 
-    local ok = self:moveTo(target.position, 6)
-    if not ok then return "could not reach" end
+    -- Filter by name
+    if nameFilter ~= "All" then
+        local next = {}
+        for _, e in ipairs(filtered) do
+            if e.category == nameFilter then
+                table.insert(next, e)
+            end
+        end
+        filtered = next
+    end
 
-    -- Wait for server to detect carry
-    task.wait(1.5)
-    return "stolen: " .. tostring(target.category or target.uid)
+    if #filtered == 0 then return "no eggs match filters" end
+
+    -- Sort by distance
+    table.sort(filtered, function(a, b)
+        return (a.position - hrp.Position).Magnitude < (b.position - hrp.Position).Magnitude
+    end)
+
+    local target = filtered[1]
+    local dist = (target.position - hrp.Position).Magnitude
+
+    -- Fast move to egg
+    fastMove(target.position, 3)
+    task.wait(0.15)
+
+    -- Find and fire nest prompt if present
+    local prompt, promptDist = findNestPrompt(target.position)
+    if prompt and promptDist and promptDist < 12 then
+        pcall(function() prompt:InputHoldBegin() end)
+        task.wait(math.max(0.1, prompt.HoldDuration or 0.4))
+        pcall(function() prompt:InputHoldEnd() end)
+    end
+
+    -- Wait for carry
+    task.wait(0.4)
+
+    -- Verify
+    local eggsAfter = self:getFieldEggs()
+    local stillThere = false
+    for _, e in ipairs(eggsAfter) do
+        if e.uid == target.uid then stillThere = true; break end
+    end
+
+    if not stillThere then
+        return "stolen: " .. tostring(target.category or target.uid)
+    end
+    return "attempted: " .. tostring(target.category or target.uid)
 end
 
 -- =========================================================
--- MODULE: AUTO ATTACK NEARBY PLAYERS
+-- AUTO ATTACK
 -- =========================================================
 local function getBatSwing()
     local net = getNetworking()
@@ -176,118 +249,63 @@ function Modules:attackStep(maxDistance)
     local swing = getBatSwing()
     if not swing then return "no bat swing remote" end
 
-    -- Find closest other player within range
     local closest, closestDist = nil, math.huge
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LP and p.Character then
             local tHrp = p.Character:FindFirstChild("HumanoidRootPart")
             if tHrp then
                 local d = (tHrp.Position - hrp.Position).Magnitude
-                if d < closestDist then
-                    closest, closestDist = p, d
-                end
+                if d < closestDist then closest, closestDist = p, d end
             end
         end
     end
 
-    if not closest or closestDist > maxDistance then
-        return "no target in range"
-    end
+    if not closest or closestDist > maxDistance then return "no target" end
 
-    -- Walk toward them
     local tHrp = closest.Character:FindFirstChild("HumanoidRootPart")
-    if tHrp then
-        self:moveTo(tHrp.Position, 2)
-    end
+    if tHrp then fastMove(tHrp.Position, 2) end
 
-    -- Swing bat 3 times
     for _ = 1, 3 do
         pcall(function() swing:FireServer() end)
         task.wait(0.15)
     end
 
-    return "attacked: " .. closest.Name .. " (" .. math.floor(closestDist) .. "m)"
+    return "attacked " .. closest.Name
 end
 
 -- =========================================================
--- MODULE: AUTO TREADMILL
+-- GET ALL PET NAMES (for filter dropdown)
 -- =========================================================
-local treadmillConn
-
-function Modules:setAutoTreadmill(on)
-    local net = getNetworking()
-    if not net then return end
-
-    if treadmillConn then
-        treadmillConn:Disconnect()
-        treadmillConn = nil
+function Modules:getPetNames()
+    local assets = RS:FindFirstChild("Data") and RS.Data:FindFirstChild("Assets")
+    if not assets then return {} end
+    local ok, mod = pcall(require, assets)
+    if not ok or type(mod) ~= "table" or not mod.Directory then return {} end
+    local names = {}
+    for _, entry in pairs(mod.Directory) do
+        local name = entry.DisplayName or entry.Name
+        if name then table.insert(names, name) end
     end
-
-    if not on then return end
-
-    local speedGained = net:FindFirstChild("RE/Treadmill/SpeedGained")
-    local renderState = net:FindFirstChild("RE/Treadmill/RenderStateShifted")
-    local beltShifted = net:FindFirstChild("RE/Treadmill/AssignedBeltShifted")
-    local conns = {}
-
-    if speedGained then
-        table.insert(conns, speedGained.OnClientEvent:Connect(function(speed, source)
-            if source == "Treadmill" then
-                print(("[AutoTreadmill] +%d speed"):format(speed))
-            end
-        end))
-    end
-    if beltShifted then
-        table.insert(conns, beltShifted.OnClientEvent:Connect(function(treadmillName, tier)
-            if treadmillName == "FlameTreadmill" then
-                print(("[AutoTreadmill] On %s tier %s"):format(treadmillName, tostring(tier)))
-            end
-        end))
-    end
-
-    -- Fire base remote to request placement (game auto-sends belt shift)
-    local rf = net:FindFirstChild("RF/Treadmill/AskWearStill")
-    if rf then
-        pcall(function() rf:InvokeServer() end)
-    end
-
-    treadmillConn = {
-        Disconnect = function()
-            for _, c in ipairs(conns) do c:Disconnect() end
-        end,
-    }
+    table.sort(names)
+    return names
 end
 
 -- =========================================================
--- MODULE: STEAL FROM SPECIFIC PLAYER
+-- GET ALL AREAS (for filter dropdown)
 -- =========================================================
-function Modules:stealFromPlayer(targetUserId)
-    local players = self:getLivePlayers()
-    local target = nil
-    for _, p in ipairs(players) do
-        if p.userId == targetUserId then target = p; break end
+function Modules:getAreas()
+    local objFolder = workspace:FindFirstChild("__OBJECTS")
+    if not objFolder then return { "All" } end
+    local areas = objFolder:FindFirstChild("Areas")
+    if not areas then return { "All" } end
+    local guard = areas:FindFirstChild("GuardAreas")
+    if not guard then return { "All" } end
+    local list = { "All" }
+    for _, area in ipairs(guard:GetChildren()) do
+        table.insert(list, area.Name)
     end
-    if not target then return "player not found in snapshot" end
-    if target.petCount == 0 then return "player has no pets" end
-
-    local plr = Players:GetPlayerByUserId(targetUserId)
-    if not plr or not plr.Character then return "player not in server" end
-    local hrp = plr.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return "player has no HRP" end
-
-    -- Walk to them
-    self:moveTo(hrp.Position, 5)
-    task.wait(0.3)
-
-    -- Swing bat
-    local swing = getBatSwing()
-    if not swing then return "no bat" end
-    for _ = 1, 5 do
-        pcall(function() swing:FireServer() end)
-        task.wait(0.2)
-    end
-
-    return "attacked " .. plr.Name
+    table.sort(list)
+    return list
 end
 
 return Modules
