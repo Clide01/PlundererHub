@@ -150,32 +150,171 @@ local function triggerPrompt(prompt)
 end
 
 -- =========================================================
--- AUTO STEAL STEP
+-- WAIT FOR SHARED SMART PROMPT TO APPEAR
+-- The game spawns SmartPromptPart when the player is near
+-- a stealable egg, and removes it when they leave.
+-- =========================================================
+local function waitForSmartPrompt(timeout)
+    timeout = timeout or 3
+    local t0 = tick()
+
+    while tick() - t0 < timeout do
+        -- Check if it already exists
+        local existing = workspace:FindFirstChild("SmartPromptPart")
+        if existing and existing:IsA("BasePart") then
+            local prompt = existing:FindFirstChildOfClass("ProximityPrompt")
+            if prompt and prompt.Enabled and prompt.ActionText == "Steal" then
+                return prompt
+            end
+        end
+        task.wait(0.1)
+    end
+    return nil
+end
+
+-- =========================================================
+-- FIND SMART PROMPTS ANYWHERE (fallback for nested parents)
+-- =========================================================
+local function findSmartPromptAnywhere()
+    local found = {}
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            local parent = obj.Parent
+            if parent and parent:IsA("BasePart") and string.find(parent.Name, "SmartPrompt", 1, true) then
+                if obj.ActionText == "Steal" and obj.Enabled then
+                    table.insert(found, {
+                        prompt = obj,
+                        part   = parent,
+                        position = parent.Position,
+                    })
+                end
+            end
+        end
+    end
+    return found
+end
+
+-- =========================================================
+-- AUTO STEAL STEP (revised)
 -- =========================================================
 function Modules:autoStealStep(category, safePosition)
     local hrp = getHRP()
     if not hrp then return "no character" end
 
-    local prompts = findSmartPrompt()
+    -- 1) Try to find an existing SmartPromptPart
+    local prompts = findSmartPromptAnywhere()
+
+    -- 2) If none exist, teleport to the closest egg in the snapshot
     if #prompts == 0 then
-        return "no SmartPromptPart"
+        local eggs = self:getFieldEggs()
+        if #eggs == 0 then
+            return "no eggs in field"
+        end
+
+        -- Filter by category
+        local filtered = eggs
+        if category and category ~= "All" then
+            filtered = {}
+            for _, e in ipairs(eggs) do
+                if e.category == category then
+                    table.insert(filtered, e)
+                end
+            end
+            if #filtered == 0 then
+                return "no " .. category .. " eggs"
+            end
+        end
+
+        -- Find closest egg
+        local closestEgg, closestDist = nil, math.huge
+        for _, e in ipairs(filtered) do
+            local d = (e.position - hrp.Position).Magnitude
+            if d < closestDist then
+                closestEgg, closestDist = e, d
+            end
+        end
+        if not closestEgg then return "no egg target" end
+
+        -- Teleport onto the egg
+        hrp.CFrame = CFrame.new(closestEgg.position + Vector3.new(0, 3, 0))
+        pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
+        task.wait(0.35)
+
+        -- Wait for SmartPromptPart to spawn (server-side logic)
+        local prompt = waitForSmartPrompt(3)
+        if not prompt then
+            -- Return to safe position and report failure
+            if safePosition then
+                local newHrp = getHRP()
+                if newHrp then
+                    newHrp.CFrame = CFrame.new(safePosition + Vector3.new(0, 3, 0))
+                end
+            end
+            return "no prompt spawned at " .. closestEgg.category
+        end
+
+        -- Fire the newly spawned prompt
+        local okB = pcall(function() prompt:InputHoldBegin() end)
+        task.wait(math.max(0.5, prompt.HoldDuration or 1.2) + 0.15)
+        pcall(function() prompt:InputHoldEnd() end)
+        task.wait(0.5)
+
+        -- Wait for carry confirmation
+        local carried = false
+        local net = getNetworking()
+        local carryConn
+        if net then
+            local ev = net:FindFirstChild("RE/EggWorld/FieldEggCarry")
+            if ev then
+                carryConn = ev.OnClientEvent:Connect(function(payload)
+                    if type(payload) == "table" and payload.IsCarrying then
+                        carried = true
+                    end
+                end)
+            end
+        end
+
+        local t0 = tick()
+        while tick() - t0 < 2 and not carried do
+            task.wait(0.1)
+        end
+        if carryConn then carryConn:Disconnect() end
+
+        -- Return to safe position
+        if safePosition then
+            local newHrp = getHRP()
+            if newHrp then
+                newHrp.CFrame = CFrame.new(safePosition + Vector3.new(0, 3, 0))
+                task.wait(0.35)
+            end
+        end
+
+        return carried
+            and ("stole " .. closestEgg.category)
+            or  ("no confirm at " .. closestEgg.category)
     end
 
-    local closest, dist = getClosestPrompt(hrp.Position, prompts)
-    if not closest then
-        return "no prompt reachable"
+    -- 3) Prompts exist — pick closest and fire
+    local closest, closestDist = nil, math.huge
+    for _, p in ipairs(prompts) do
+        local d = (p.position - hrp.Position).Magnitude
+        if d < closestDist then
+            closest, closestDist = p, d
+        end
     end
+    if not closest then return "no prompt reachable" end
 
-    -- Teleport to prompt
+    -- Teleport to prompt and fire
     hrp.CFrame = CFrame.new(closest.position + Vector3.new(0, 3, 0))
     pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
     task.wait(0.25)
 
-    -- Fire prompt
-    triggerPrompt(closest.prompt)
-    task.wait(0.4)
+    local okB = pcall(function() closest.prompt:InputHoldBegin() end)
+    task.wait(math.max(0.5, closest.prompt.HoldDuration or 1.2) + 0.15)
+    pcall(function() closest.prompt:InputHoldEnd() end)
+    task.wait(0.5)
 
-    -- Check for carry confirmation
+    -- Wait for carry confirmation
     local carried = false
     local net = getNetworking()
     local carryConn
@@ -206,8 +345,8 @@ function Modules:autoStealStep(category, safePosition)
     end
 
     return carried
-        and ("stole at " .. string.format("%.1f", dist) .. "m")
-        or  ("no confirm at " .. string.format("%.1f", dist) .. "m")
+        and ("stole at " .. string.format("%.1f", closestDist) .. "m")
+        or  ("no confirm at " .. string.format("%.1f", closestDist) .. "m")
 end
 
 -- =========================================================
