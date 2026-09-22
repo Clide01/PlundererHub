@@ -10,8 +10,8 @@ local gv = (getgenv and getgenv()) or _G
 if gv.__PLUNDERER_RUNNING then return end
 gv.__PLUNDERER_RUNNING = true
 
-local UI_URL      = "https://raw.githubusercontent.com/Clide01/PlundererHub/main/PlundererUI.lua"
-local MODULES_URL = "https://raw.githubusercontent.com/Clide01/PlundererHub/main/PlundererModules.lua"
+local UI_URL      = "https://raw.githubusercontent.com/Clide01/PlundererHub/refs/heads/main/PlundererUI.lua"
+local MODULES_URL = "https://raw.githubusercontent.com/Clide01/PlundererHub/refs/heads/main/PlundererModules.lua"
 
 local PlundererUI
 do
