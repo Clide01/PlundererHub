@@ -1,7 +1,7 @@
 scriptkey = "keyless"
 
 local ROUTES = {
-    [107778070777162] = "PASTE_YOUR_REDSTONEGUARD_URL_HERE",
+    [107778070777162] = "https://api.redstoneguard.xyz/api/loader/7c9dae3a-bf19-4057-9e6c-1d8c852bd0b3/init",
 }
 
 local function loadScriptForPlace()
