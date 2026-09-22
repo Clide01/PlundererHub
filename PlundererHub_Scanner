@@ -1,0 +1,189 @@
+local Players     = game:GetService("Players")
+local RS          = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local LP          = Players.LocalPlayer
+
+local BUFFER = {}
+local function log(fmt, ...)
+    local line = select("#", ...) > 0 and string.format(fmt, ...) or tostring(fmt)
+    table.insert(BUFFER, line)
+    print(line)
+end
+
+local function sep(t)
+    log("")
+    log("════════════════════════════════════════════════════════")
+    log("  " .. t)
+    log("════════════════════════════════════════════════════════")
+end
+
+log("PlundererHub Scanner")
+log("Time   : " .. os.date("%Y-%m-%d %H:%M:%S"))
+log("Player : " .. LP.Name .. " (" .. LP.UserId .. ")")
+log("JobId  : " .. game.JobId)
+
+-- ═══════════════════════════════════════════════════════════
+-- A) REMOTES THAT MATTER
+-- ═══════════════════════════════════════════════════════════
+sep("A) NETWORKING REMOTES")
+
+local Networking = RS:FindFirstChild("Packages") and RS.Packages:FindFirstChild("Networking")
+if not Networking then
+    log("Packages.Networking not found")
+else
+    local function dump(prefix)
+        for _, c in ipairs(Networking:GetChildren()) do
+            if string.find(c.Name, prefix, 1, true) then
+                log("  [%s] %s", c.ClassName, c.Name)
+            end
+        end
+    end
+    dump("RF/")
+    dump("RE/")
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- B) UPGRADE / SHOP PROMPTS
+-- ═══════════════════════════════════════════════════════════
+sep("B) UPGRADE PROMPTS IN WORKSPACE")
+
+local upgradeFolder = workspace:FindFirstChild("__OBJECTS")
+    and workspace.__OBJECTS:FindFirstChild("Machines")
+if upgradeFolder then
+    for _, m in ipairs(upgradeFolder:GetChildren()) do
+        log("  Machine: %s", m:GetFullName())
+        for _, d in ipairs(m:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                log("    Prompt: Action=%q Object=%q Hold=%.2f MaxDist=%.1f",
+                    d.ActionText, d.ObjectText, d.HoldDuration, d.MaxActivationDistance)
+            end
+        end
+    end
+else
+    log("  Machines folder not found")
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- C) CHARACTER STATE
+-- ═══════════════════════════════════════════════════════════
+sep("C) CHARACTER STATE")
+
+local char = LP.Character
+local hum  = char and char:FindFirstChildOfClass("Humanoid")
+local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+if hum then
+    log("  Humanoid WalkSpeed   : %d", hum.WalkSpeed)
+    log("  Humanoid JumpPower   : %d", hum.JumpPower)
+    log("  Humanoid PlatformSt  : %s", tostring(hum.PlatformStand))
+    log("  Humanoid Health      : %d / %d", hum.Health, hum.MaxHealth)
+    log("  Humanoid State       : %s", tostring(hum:GetState()))
+end
+if hrp then
+    log("  HRP Anchored         : %s", tostring(hrp.Anchored))
+    log("  HRP CanCollide       : %s", tostring(hrp.CanCollide))
+end
+
+-- Check body scale objects
+if hum then
+    for _, name in ipairs({ "BodyHeightScale", "BodyWidthScale", "BodyDepthScale", "HeadScale" }) do
+        local obj = hum:FindFirstChild(name)
+        if obj then log("  %s = %.2f", name, obj.Value) end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- D) RAGDOLL / KNOCKBACK SIGNALS
+-- ═══════════════════════════════════════════════════════════
+sep("D) CHARACTER SCRIPTS (for anti-ragdoll target)")
+
+if char then
+    for _, c in ipairs(char:GetDescendants()) do
+        if c:IsA("LocalScript") or c:IsA("Script") then
+            log("  [%s] %s", c.ClassName, c.Name)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- E) SELL REMOTES
+-- ═══════════════════════════════════════════════════════════
+sep("E) SELL REMOTES")
+if Networking then
+    for _, c in ipairs(Networking:GetChildren()) do
+        if string.find(c.Name, "PetSatchel", 1, true)
+           or string.find(c.Name, "Haul", 1, true)
+           or string.find(c.Name, "Sell", 1, true) then
+            log("  [%s] %s", c.ClassName, c.Name)
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- F) THEFT / ATTACK REMOTES
+-- ═══════════════════════════════════════════════════════════
+sep("F) THEFT / COMBAT REMOTES")
+if Networking then
+    local keywords = { "Steal", "Attack", "Hit", "Combat", "Tool", "Bat", "Weapon" }
+    for _, c in ipairs(Networking:GetChildren()) do
+        for _, kw in ipairs(keywords) do
+            if string.find(c.Name, kw, 1, true) then
+                log("  [%s] %s", c.ClassName, c.Name)
+                break
+            end
+        end
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- G) OTHER PLAYERS HOLDING PETS (for steal-from-players)
+-- ═══════════════════════════════════════════════════════════
+sep("G) OTHER PLAYERS — HELD PETS")
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p == LP then continue end
+    local c = p.Character
+    if not c then continue end
+    local held = {}
+    for _, child in ipairs(c:GetChildren()) do
+        if child:IsA("Tool") or child:IsA("Model") then
+            table.insert(held, child.ClassName .. ":" .. child.Name)
+        end
+    end
+    if #held > 0 then
+        log("  %s → %s", p.Name, table.concat(held, ", "))
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- H) INDEX MODULE (for auto complete index)
+-- ═══════════════════════════════════════════════════════════
+sep("H) INDEX MODULE")
+local indexMod = RS:FindFirstChild("Data")
+    and RS.Data:FindFirstChild("Assets")
+if indexMod then
+    log("  Found: %s", indexMod:GetFullName())
+    local ok, mod = pcall(require, indexMod)
+    if ok and type(mod) == "table" then
+        local keys = {}
+        for k in pairs(mod) do table.insert(keys, tostring(k)) end
+        table.sort(keys)
+        log("  keys: %s", table.concat(keys, ", "):sub(1, 200))
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- WRITE FILE
+-- ═══════════════════════════════════════════════════════════
+sep("SCAN COMPLETE")
+
+local fileName = string.format("plundererhub_scan_%d.txt", os.time())
+local content = table.concat(BUFFER, "\n")
+
+local ok = pcall(function() writefile(fileName, content) end)
+if ok then
+    log("✓ File written: %s", fileName)
+    log("  Size: %d bytes", #content)
+else
+    log("writefile not available — copy from console")
+end
